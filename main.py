@@ -131,7 +131,6 @@ import subprocess
 import tempfile
 import os
 import shutil
-# 1. Added the new python package needed for stable PDF-to-Word conversion
 from pdf2docx import Converter
 
 app = FastAPI()
@@ -202,7 +201,7 @@ async def word_to_pdf(file: UploadFile = File(...)):
 
 
 # =====================================================================
-# ENDPOINT 2: PDF TO WORD (UPDATED & FIXED)
+# ENDPOINT 2: PDF TO WORD (NEW CUSTOM ERROR MESSAGES FOR POSTMAN)
 # =====================================================================
 @app.post("/convert/pdf-to-word")
 async def pdf_to_word(file: UploadFile = File(...)):
@@ -214,33 +213,45 @@ async def pdf_to_word(file: UploadFile = File(...)):
 
     tmp_dir = tempfile.mkdtemp()
     try:
-        # Step A: Save incoming PDF into temporary directory
+        # Step A: Save incoming PDF
         input_path = os.path.join(tmp_dir, file.filename)
         with open(input_path, "wb") as f:
             content = await file.read()
             f.write(content)
 
-        # Step B: Set up output filename and path (.docx)
+        # Step B: Setup file naming
         docx_filename = os.path.splitext(file.filename)[0] + ".docx"
         docx_path = os.path.join(tmp_dir, docx_filename)
 
-        # Step C: Use pdf2docx to cleanly rebuild the layout instead of LibreOffice
-        cv = Converter(input_path)
-        cv.convert(docx_path, start=0, end=None)  # Converts all pages
-        cv.close()
+        # Step C: Primary conversion engine attempt
+        try:
+            cv = Converter(input_path)
+            cv.convert(docx_path, start=0, end=None)
+            cv.close()
+        except Exception as conversion_err:
+            # Fallback block: If the direct converter crashed, try pulling text cleanly via layout engine rules
+            try:
+                cv = Converter(input_path)
+                cv.convert(docx_path, multi_processing=False, cpu_count=1)
+                cv.close()
+            except Exception:
+                # If both primary and fallback code fail, throw an explicit layout engine error text
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"[NEW SERVER CODE] Native converter engine failed to parse this PDF layout: {str(conversion_err)}"
+                )
 
-        # Step D: Make sure it was built successfully
+        # Step D: Check if file built successfully
         if not os.path.exists(docx_path):
             raise HTTPException(
                 status_code=500,
-                detail="DOCX was not created"
+                detail="[NEW SERVER CODE] Conversion processed but output file is missing on the filesystem"
             )
 
-        # Step E: Read the generated Word bytes
+        # Step E: Read and Stream back
         with open(docx_path, "rb") as f:
             docx_bytes = f.read()
 
-        # Step F: Stream file back down to Postman/Flutter
         return Response(
             content=docx_bytes,
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -249,8 +260,13 @@ async def pdf_to_word(file: UploadFile = File(...)):
             }
         )
 
+    except HTTPException as http_err:
+        raise http_err
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Catch any structural server failures with an unmistakable tag
+        raise HTTPException(
+            status_code=500, 
+            detail=f"[NEW SERVER CODE] Complete system crash: {str(e)}"
+        )
     finally:
-        # Step G: Clean up the temporary folder entirely to keep Railway lightweight
         shutil.rmtree(tmp_dir, ignore_errors=True)
