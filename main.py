@@ -320,15 +320,11 @@ def convert_pdf_to_word(input_path: str, output_path: str):
     )
     cv.close()
 
-    # ── Step 3: Fix page size in docx to exactly match PDF ───────────
+    # ── Step 3: Fix page size only — do NOT touch margins ────────────
     doc = Document(output_path)
     for section in doc.sections:
         section.page_width = Pt(page_width_pt)
         section.page_height = Pt(page_height_pt)
-        section.left_margin = Pt(0)
-        section.right_margin = Pt(0)
-        section.top_margin = Pt(0)
-        section.bottom_margin = Pt(0)
     doc.save(output_path)
 
 
